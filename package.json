@@ -4,14 +4,17 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "start": "nodemon index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
     "isomorphic-ws": "^4.0.1",
     "protobufjs": "^6.9.0",
-    "ws": "^7.3.1"
+    "ws": "^7.5.10"
   }
 }

@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Stock Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .price-up { animation: flash-green 0.5s ease-in-out; }
+        .price-down { animation: flash-red 0.5s ease-in-out; }
+        
+        @keyframes flash-green {
+            0%, 100% { background-color: transparent; }
+            50% { background-color: #dcfce7; }
+        }
+        
+        @keyframes flash-red {
+            0%, 100% { background-color: transparent; }
+            50% { background-color: #fef2f2; }
+        }
+        
+        .connection-pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        
+        .search-dropdown {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .stock-pill {
+            transition: all 0.2s ease-in-out;
+        }
+        
+        .stock-pill:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="min-h-screen p-4">
+        <div class="max-w-7xl mx-auto">
+            <!-- Header -->
+            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+                <h1 class="text-3xl font-bold text-gray-800 mb-4">
+                    <i class="fas fa-chart-line mr-3 text-blue-600"></i>
+                    Real-time Stock Tracker
+                </h1>
+                
+                <!-- Connection Status -->
+                <div class="flex items-center mb-4">
+                    <div id="connection-indicator" class="w-3 h-3 rounded-full mr-2 bg-red-500 connection-pulse"></div>
+                    <span id="connection-status" class="text-sm text-red-600">Connecting...</span>
+                    <span id="message-count" class="ml-4 text-xs text-gray-500">Messages: 0</span>
+                </div>
+
+                <!-- Search -->
+                <div class="relative mb-4">
+                    <div class="flex items-center">
+                        <i class="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+                        <input
+                            type="text"
+                            id="search-input"
+                            placeholder="Search stocks (e.g., AAPL, Tesla, Bitcoin)..."
+                            class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            autocomplete="off"
+                        />
+                    </div>
+                    
+                    <!-- Search Results -->
+                    <div id="search-results" class="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg hidden search-dropdown">
+                        <!-- Search results will be populated here -->
+                    </div>
+                </div>
+
+                <!-- Popular Stocks -->
+                <div>
+                    <h3 class="text-sm font-medium text-gray-700 mb-2">Popular Stocks:</h3>
+                    <div id="popular-stocks" class="flex flex-wrap gap-2">
+                        <!-- Popular stocks will be loaded here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Selected Stocks Pills -->
+            <div id="selected-stocks-section" class="bg-white rounded-lg shadow-md p-4 mb-6 hidden">
+                <h3 class="text-sm font-medium text-gray-700 mb-2">
+                    Tracking (<span id="tracking-count">0</span>):
+                </h3>
+                <div id="selected-stocks" class="flex flex-wrap gap-2">
+                    <!-- Selected stock pills will be populated here -->
+                </div>
+            </div>
+
+            <!-- Stock Table -->
+            <div id="stock-table-section" class="bg-white rounded-lg shadow-md overflow-hidden hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Symbol</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Change</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Change %</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">High</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Low</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Volume</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stock-table-body" class="bg-white divide-y divide-gray-200">
+                            <!-- Stock rows will be populated here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Empty State -->
+            <div id="empty-state" class="bg-white rounded-lg shadow-md p-12 text-center">
+                <div class="text-gray-500 mb-4">
+                    <i class="fas fa-search text-4xl mb-4 text-gray-300"></i>
+                    <h3 class="text-lg font-medium">No stocks selected</h3>
+                    <p class="text-sm">Search and add stocks to start tracking real-time data</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class StockTracker {
+            constructor() {
+                this.selectedStocks = ['AAPL', 'MSFT', 'GOOGL']; // Default stocks
+                this.stockData = {};
+                this.ws = null;
+                this.isConnected = false;
+                this.popularStocks = [];
+                this.messageCount = 0;
+                this.reconnectAttempts = 0;
+                this.maxReconnectAttempts = 5;
+                
+                this.initializeElements();
+                this.loadPopularStocks();
+                this.connectWebSocket();
+                this.bindEvents();
+                this.updateUI();
+            }
+
+            initializeElements() {
+                this.elements = {
+                    searchInput: document.getElementById('search-input'),
+                    searchResults: document.getElementById('search-results'),
+                    popularStocks: document.getElementById('popular-stocks'),
+                    selectedStocksSection: document.getElementById('selected-stocks-section'),
+                    selectedStocks: document.getElementById('selected-stocks'),
+                    trackingCount: document.getElementById('tracking-count'),
+                    stockTableSection: document.getElementById('stock-table-section'),
+                    stockTableBody: document.getElementById('stock-table-body'),
+                    emptyState: document.getElementById('empty-state'),
+                    connectionIndicator: document.getElementById('connection-indicator'),
+                    connectionStatus: document.getElementById('connection-status'),
+                    messageCount: document.getElementById('message-count')
+                };
+            }
+
+            async loadPopularStocks() {
+                try {
+                    const response = await fetch('/api/popular-stocks');
+                    this.popularStocks = await response.json();
+                    this.renderPopularStocks();
+                } catch (error) {
+                    console.error('Failed to load popular stocks:', error);
+                    // Fallback data
+                    this.popularStocks = [
+                        { symbol: 'AAPL', name: 'Apple Inc.' },
+                        { symbol: 'MSFT', name: 'Microsoft Corporation' },
+                        { symbol: 'GOOGL', name: 'Alphabet Inc.' },
+                        { symbol: 'AMZN', name: 'Amazon.com Inc.' },
+                        { symbol: 'TSLA', name: 'Tesla Inc.' },
+                        { symbol: 'NVDA', name: 'NVIDIA Corporation' }
+                    ];
+                    this.renderPopularStocks();
+                }
+            }
+
+            renderPopularStocks() {
+                this.elements.popularStocks.innerHTML = this.popularStocks.slice(0, 6).map(stock => `
+                    <button
+                        onclick="stockTracker.addStock('${stock.symbol}')"
+                        class="px-3 py-1 text-sm rounded-full border transition-all ${
+                            this.selectedStocks.includes(stock.symbol)
+                                ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                                : 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100 cursor-pointer'
+                        }"
+                        ${this.selectedStocks.includes(stock.symbol) ? 'disabled' : ''}
+                    >
+                        ${stock.symbol}
+                    </button>
+                `).join('');
+            }
+
+            connectWebSocket() {
+                console.log('Attempting to connect to WebSocket...');
+                
+                // Use the correct WebSocket URL
+                const wsUrl = `ws://${window.location.hostname}:3001`;
+                this.ws = new WebSocket(wsUrl);
+                
+                this.ws.onopen = () => {
+                    console.log('Connected to backend WebSocket');
+                    this.isConnected = true;
+                    this.reconnectAttempts = 0;
+                    this.updateConnectionStatus();
+                    
+                    // Subscribe to selected stocks
+                    if (this.selectedStocks.length > 0) {
+                        this.sendMessage({
+                            type: 'subscribe',
+                            symbols: this.selectedStocks
+                        });
+                    }
+                };
+                
+                this.ws.onmessage = (event) => {
+                    try {
+                        const message = JSON.parse(event.data);
+                        this.messageCount++;
+                        this.elements.messageCount.textContent = `Messages: ${this.messageCount}`;
+                        
+                        console.log('Received message:', message);
+                        
+                        if (message.type === 'ticker') {
+                            const data = message.data;
+                            const previousPrice = this.stockData[data.id]?.price;
+                            this.stockData[data.id] = data;
+                            
+                            // Add price change animation
+                            if (previousPrice && previousPrice !== data.price) {
+                                this.animatePriceChange(data.id, data.price > previousPrice);
+                            }
+                            
+                            this.updateStockTable();
+                        } else if (message.type === 'connection') {
+                            console.log('Connection established:', message);
+                        } else if (message.type === 'error') {
+                            console.error('Server error:', message.message);
+                        }
+                    } catch (error) {
+                        console.error('Failed to parse message:', error);
+                    }
+                };
+                
+                this.ws.onclose = (event) => {
+                    console.log('Disconnected from backend WebSocket:', event.code, event.reason);
+                    this.isConnected = false;
+                    this.updateConnectionStatus();
+                    
+                    // Attempt to reconnect
+                    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                        this.reconnectAttempts++;
+                        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+                        console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+                        setTimeout(() => {
+                            this.connectWebSocket();
+                        }, delay);
+                    } else {
+                        console.error('Max reconnection attempts reached');
+                    }
+                };
+                
+                this.ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    this.isConnected = false;
+                    this.updateConnectionStatus();
+                };
+            }
+
+            sendMessage(message) {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify(message));
+                    console.log('Sent message:', message);
+                } else {
+                    console.warn('WebSocket not connected, cannot send message:', message);
+                }
+            }
+
+            animatePriceChange(symbol, isUp) {
+                const row = document.querySelector(`tr[data-symbol="${symbol}"]`);
+                if (row) {
+                    row.classList.remove('price-up', 'price-down');
+                    setTimeout(() => {
+                        row.classList.add(isUp ? 'price-up' : 'price-down');
+                    }, 10);
+                }
+            }
+
+            updateConnectionStatus() {
+                const indicator = this.elements.connectionIndicator;
+                const status = this.elements.connectionStatus;
+                
+                if (this.isConnected) {
+                    indicator.className = 'w-3 h-3 rounded-full mr-2 bg-green-500';
+                    status.textContent = 'Connected to live data';
+                    status.className = 'text-sm text-green-600';
+                } else {
+                    indicator.className = 'w-3 h-3 rounded-full mr-2 bg-red-500 connection-pulse';
+                    if (this.reconnectAttempts > 0) {
+                        status.textContent = `Reconnecting... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`;
+                    } else {
+                        status.textContent = 'Disconnected';
+                    }
+                    status.className = 'text-sm text-red-600';
+                }
+            }
+
+            bindEvents() {
+                let searchTimeout;
+                this.elements.searchInput.addEventListener('input', (e) => {
+                    clearTimeout(searchTimeout);
+                    searchTimeout = setTimeout(() => {
+                        this.handleSearch(e.target.value);
+                    }, 300);
+                });
+
+                document.addEventListener('click', (e) => {
+                    if (!e.target.closest('#search-input') && !e.target.closest('#search-results')) {
+                        this.elements.searchResults.classList.add('hidden');
+                    }
+                });
+            }
+
+            async handleSearch(query) {
+                if (query.length > 1) {
+                    try {
+                        const response = await fetch(`/api/search/${encodeURIComponent(query)}`);
+                        const results = await response.json();
+                        this.renderSearchResults(results);
+                    } catch (error) {
+                        console.error('Search failed:', error);
+                        // Fallback to local search
+                        const filtered = this.popularStocks.filter(stock => 
+                            stock.symbol.toLowerCase().includes(query.toLowerCase()) ||
+                            stock.name.toLowerCase().includes(query.toLowerCase())
+                        );
+                        this.renderSearchResults(filtered);
+                    }
+                } else {
+                    this.elements.searchResults.classList.add('hidden');
+                }
+            }
+
+            renderSearchResults(results) {
+                if (results.length === 0) {
+                    this.elements.searchResults.innerHTML = `
+                        <div class="px-4 py-2 text-gray-500 text-sm">
+                            No results found
+                        </div>
+                    `;
+                    this.elements.searchResults.classList.remove('hidden');
+                    return;
+                }
+
+                this.elements.searchResults.innerHTML = results.map(stock => `
+                    <div
+                        onclick="stockTracker.addStock('${stock.symbol}')"
+                        class="px-4 py-2 hover:bg-gray-100 cursor-pointer flex justify-between items-center ${
+                            this.selectedStocks.includes(stock.symbol) ? 'opacity-50 cursor-not-allowed' : ''
+                        }"
+                    >
+                        <div>
+                            <div class="font-medium text-gray-800">${stock.symbol}</div>
+                            <div class="text-sm text-gray-600">${stock.name}</div>
+                        </div>
+                        <i class="fas ${this.selectedStocks.includes(stock.symbol) ? 'fa-check text-green-500' : 'fa-plus text-blue-500'}"></i>
+                    </div>
+                `).join('');
+                
+                this.elements.searchResults.classList.remove('hidden');
+            }
+
+            addStock(symbol) {
+                if (this.selectedStocks.includes(symbol)) {
+                    console.log(`Stock ${symbol} already selected`);
+                    return;
+                }
+
+                console.log(`Adding stock: ${symbol}`);
+                this.selectedStocks.push(symbol);
+                this.updateUI();
+                
+                // Subscribe to new stock
+                this.sendMessage({
+                    type: 'subscribe',
+                    symbols: [symbol]
+                });
+                
+                this.elements.searchInput.value = '';
+                this.elements.searchResults.classList.add('hidden');
+            }
+
+            removeStock(symbol) {
+                console.log(`Removing stock: ${symbol}`);
+                this.selectedStocks = this.selectedStocks.filter(s => s !== symbol);
+                delete this.stockData[symbol];
+                
+                // Unsubscribe from stock
+                this.sendMessage({
+                    type: 'unsubscribe',
+                    symbols: [symbol]
+                });
+                
+                this.updateUI();
+            }
+
+            updateUI() {
+                this.renderSelectedStocks();
+                this.renderPopularStocks();
+                this.updateStockTable();
+                this.toggleEmptyState();
+            }
+
+            renderSelectedStocks() {
+                if (this.selectedStocks.length === 0) {
+                    this.elements.selectedStocksSection.classList.add('hidden');
+                    return;
+                }
+
+                this.elements.selectedStocksSection.classList.remove('hidden');
+                this.elements.trackingCount.textContent = this.selectedStocks.length;
+                
+                this.elements.selectedStocks.innerHTML = this.selectedStocks.map(symbol => `
+                    <div class="flex items-center bg-blue-100 text-blue-800 px-3 py-1 rounded-full stock-pill">
+                        <span class="text-sm font-medium">${symbol}</span>
+                        <button
+                            onclick="stockTracker.removeStock('${symbol}')"
+                            class="ml-2 text-blue-600 hover:text-blue-800"
+                        >
+                            <i class="fas fa-times text-xs"></i>
+                        </button>
+                    </div>
+                `).join('');
+            }
+
+            updateStockTable() {
+                if (this.selectedStocks.length === 0) return;
+
+                this.elements.stockTableBody.innerHTML = this.selectedStocks.map(symbol => {
+                    const data = this.stockData[symbol];
+                    const isPositive = data?.change >= 0;
+                    const hasData = data && data.price;
+                    
+                    return `
+                        <tr class="hover:bg-gray-50 transition-colors" data-symbol="${symbol}">
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <div class="flex items-center">
+                                    <div class="text-sm font-medium text-gray-900">${symbol}</div>
+                                    ${!hasData ? '<div class="text-xs text-gray-500 ml-2">Loading...</div>' : ''}
+                                </div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                ${this.formatPrice(data?.price)}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                <div class="flex items-center ${isPositive ? 'text-green-600' : 'text-red-600'}">
+                                    ${hasData ? `<i class="fas ${isPositive ? 'fa-arrow-up' : 'fa-arrow-down'} mr-1 text-xs"></i>` : ''}
+                                    ${this.formatChange(data?.change)}
+                                </div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                    !hasData ? 'bg-gray-100 text-gray-800' : 
+                                    isPositive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                                }">
+                                    ${this.formatPercent(data?.changePercent)}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                ${this.formatPrice(data?.dayHigh)}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                ${this.formatPrice(data?.dayLow)}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                ${this.formatVolume(data?.dayVolume)}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <button
+                                    onclick="stockTracker.removeStock('${symbol}')"
+                                    class="text-red-600 hover:text-red-900 text-sm font-medium"
+                                >
+                                    Remove
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+
+            toggleEmptyState() {
+                if (this.selectedStocks.length === 0) {
+                    this.elements.stockTableSection.classList.add('hidden');
+                    this.elements.emptyState.classList.remove('hidden');
+                } else {
+                    this.elements.stockTableSection.classList.remove('hidden');
+                    this.elements.emptyState.classList.add('hidden');
+                }
+            }
+
+            formatPrice(price) {
+                if (price === undefined || price === null) return '--';
+                return `${parseFloat(price).toFixed(2)}`;
+            }
+
+            formatChange(change) {
+                if (change === undefined || change === null) return '--';
+                const sign = change >= 0 ? '+' : '';
+                return `${sign}${parseFloat(change).toFixed(2)}`;
+            }
+
+            formatPercent(percent) {
+                if (percent === undefined || percent === null) return '--';
+                const sign = percent >= 0 ? '+' : '';
+                return `${sign}${parseFloat(percent).toFixed(2)}%`;
+            }
+
+            formatVolume(volume) {
+                if (!volume) return '--';
+                if (volume >= 1000000) {
+                    return `${(volume / 1000000).toFixed(1)}M`;
+                } else if (volume >= 1000) {
+                    return `${(volume / 1000).toFixed(1)}K`;
+                }
+                return volume.toString();
+            }
+
+            // Method to manually reconnect
+            reconnect() {
+                if (this.ws) {
+                    this.ws.close();
+                }
+                this.reconnectAttempts = 0;
+                setTimeout(() => {
+                    this.connectWebSocket();
+                }, 100);
+            }
+        }
+
+        // Initialize the application
+        let stockTracker;
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('Initializing Stock Tracker...');
+            stockTracker = new StockTracker();
+            
+            // Add manual reconnect button for debugging
+            window.reconnect = () => stockTracker.reconnect();
+            console.log('Stock Tracker initialized. Type reconnect() to manually reconnect.');
+        });
+    </script>
+</body>
+</html>
